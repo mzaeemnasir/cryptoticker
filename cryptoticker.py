@@ -133,154 +133,63 @@ def set_no_color():
     _NO_COLOR = True
 
 
-# ── ASCII Big Digit Font (5 lines tall) ───────────────────────────────────────
-# Each digit/symbol maps to a tuple of 5 strings, each the same width.
+# ── Big Price Display (art / pyfiglet) ────────────────────────────────────────
 
-BIG_FONT = {
-    "0": (
-        " $$$ ",
-        "$   $",
-        "$   $",
-        "$   $",
-        " $$$ ",
-    ),
-    "1": (
-        "  $  ",
-        " $$  ",
-        "  $  ",
-        "  $  ",
-        " $$$.",
-    ),
-    "2": (
-        " $$$ ",
-        "$   $",
-        "  $$ ",
-        " $   ",
-        "$$$$$",
-    ),
-    "3": (
-        " $$$ ",
-        "$   $",
-        "  $$ ",
-        "$   $",
-        " $$$ ",
-    ),
-    "4": (
-        "$   $",
-        "$   $",
-        "$$$$$",
-        "    $",
-        "    $",
-    ),
-    "5": (
-        "$$$$$",
-        "$    ",
-        "$$$$ ",
-        "    $",
-        "$$$$ ",
-    ),
-    "6": (
-        " $$$ ",
-        "$    ",
-        "$$$$ ",
-        "$   $",
-        " $$$ ",
-    ),
-    "7": (
-        "$$$$$",
-        "    $",
-        "   $ ",
-        "  $  ",
-        "  $  ",
-    ),
-    "8": (
-        " $$$ ",
-        "$   $",
-        " $$$ ",
-        "$   $",
-        " $$$ ",
-    ),
-    "9": (
-        " $$$ ",
-        "$   $",
-        " $$$$",
-        "    $",
-        " $$$ ",
-    ),
-    ".": (
-        "  ",
-        "  ",
-        "  ",
-        "  ",
-        "$$",
-    ),
-    ",": (
-        "  ",
-        "  ",
-        "  ",
-        " $",
-        "$ ",
-    ),
-    "$": (
-        " $$$ ",
-        "$ $  ",
-        " $$$ ",
-        "  $ $",
-        " $$$ ",
-    ),
-    " ": (
-        "   ",
-        "   ",
-        "   ",
-        "   ",
-        "   ",
-    ),
-    "-": (
-        "     ",
-        "     ",
-        "$$$$$",
-        "     ",
-        "     ",
-    ),
-    "+": (
-        "  $  ",
-        "  $  ",
-        "$$$$$",
-        "  $  ",
-        "  $  ",
-    ),
-    "%": (
-        "$  $",
-        "  $ ",
-        " $  ",
-        "$  $",
-        "    ",
-    ),
-}
+try:
+    from art import text2art
+    _HAS_ART = True
+except ImportError:
+    _HAS_ART = False
+
+try:
+    import pyfiglet
+    _HAS_PYFIGLET = True
+except ImportError:
+    _HAS_PYFIGLET = False
 
 
-def render_big_price(text, color=""):
-    """Render text as 5-line-tall ASCII art. Returns list of 5 strings."""
-    lines = ["", "", "", "", ""]
-    for ch in text:
-        glyph = BIG_FONT.get(ch)
-        if glyph is None:
-            glyph = BIG_FONT.get(" ")
-        for i in range(5):
-            lines[i] += glyph[i] + " "
-    # Apply color: replace '$' with '#' block char, colored
-    result = []
-    for line in lines:
-        colored = ""
-        for ch in line:
-            if ch == "$":
-                colored += f"{color}#{RST}"
-            elif ch == ".":
-                colored += f"{color}#{RST}"
-            else:
-                colored += ch
-        result.append(colored)
-    return result
+def render_big_price(text, color="", max_width=72):
+    """Render price text as large block-character ASCII art.
+
+    Fallback chain:
+      1. art library with 'banner3' font (bold # characters)
+      2. pyfiglet with 'banner3' font
+      3. Bold colored single-line price
+    """
+    raw_lines = None
+
+    if _HAS_ART:
+        try:
+            art_text = text2art(text, font="banner3")
+            raw_lines = art_text.rstrip("\n").split("\n")
+        except Exception:
+            pass
+
+    if raw_lines is None and _HAS_PYFIGLET:
+        try:
+            art_text = pyfiglet.figlet_format(text, font="banner3")
+            raw_lines = art_text.rstrip("\n").split("\n")
+        except Exception:
+            pass
+
+    if raw_lines:
+        # Strip trailing empty lines
+        while raw_lines and not raw_lines[-1].strip():
+            raw_lines.pop()
+        # Colorize non-space characters
+        result = []
+        for line in raw_lines:
+            colored = ""
+            for ch in line:
+                if ch != " ":
+                    colored += f"{color}{ch}{RST}"
+                else:
+                    colored += ch
+            result.append(colored)
+        return result
+
+    # Fallback: bold single-line price
+    return [f"{color}{text}{RST}"]
 
 
 # ── Data Model ────────────────────────────────────────────────────────────────
@@ -548,8 +457,16 @@ class TickerDisplay:
         lines.append(b.line())
 
         if not self.compact:
-            # Big ASCII price
-            big_text = f"${price_str}"
+            # Big ASCII price — show meaningful digits in block font
+            if td.price >= 1:
+                # Large prices: integer part only (decimals change too fast)
+                big_text = f"${price_str.split('.')[0]}"
+            elif td.price >= 0.01:
+                # Mid-range: show 4 decimals (e.g. $0.0619)
+                big_text = f"${td.price:.4f}"
+            else:
+                # Tiny prices: show 4 significant figures (e.g. $0.0619)
+                big_text = f"${td.price:.4g}"
             big_lines = render_big_price(big_text, BPC)
 
             # Check if big price fits
@@ -557,6 +474,9 @@ class TickerDisplay:
             if max_visible + 6 <= b.W:
                 for bl in big_lines:
                     lines.append(b.line(f"   {bl}", align="left"))
+                # Show full price with decimals below the big text
+                detail = f"       {DIM}${price_str}{RST}{pdiff}"
+                lines.append(b.line(detail, align="left"))
             else:
                 # Fallback: large single-line price
                 lines.append(

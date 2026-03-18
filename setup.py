@@ -12,6 +12,7 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "websocket-client>=1.6.0",
+        "art>=6.0",
         'colorama>=0.4.6; sys_platform == "win32"',
     ],
     entry_points={
