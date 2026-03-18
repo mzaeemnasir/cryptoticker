@@ -26,6 +26,7 @@ import atexit
 import logging
 import argparse
 import threading
+import unicodedata
 from datetime import datetime
 from collections import deque
 from dataclasses import dataclass, field
@@ -110,8 +111,18 @@ def strip_ansi(s):
     return re.sub(r"\033\[[0-9;]*m", "", s)
 
 
+def char_width(ch):
+    """Return the display width of a character in a terminal."""
+    eaw = unicodedata.east_asian_width(ch)
+    if eaw in ("W", "F"):
+        return 2
+    return 1
+
+
 def visible_len(s):
-    return len(strip_ansi(s))
+    """Return the visible display width of a string (accounting for wide chars)."""
+    clean = strip_ansi(s)
+    return sum(char_width(ch) for ch in clean)
 
 
 def set_no_color():
@@ -257,15 +268,15 @@ def render_big_price(text, color=""):
             glyph = BIG_FONT.get(" ")
         for i in range(5):
             lines[i] += glyph[i] + " "
-    # Apply color: replace '$' with the block char, colored
+    # Apply color: replace '$' with '#' block char, colored
     result = []
     for line in lines:
         colored = ""
         for ch in line:
             if ch == "$":
-                colored += f"{color}\u2588{RST}"
+                colored += f"{color}#{RST}"
             elif ch == ".":
-                colored += f"{color}\u2588{RST}"
+                colored += f"{color}#{RST}"
             else:
                 colored += ch
         result.append(colored)
@@ -402,13 +413,11 @@ def price_bar(lo, hi, cur, width=34):
     filled = int(pct * width)
     empty = width - filled - 1
 
-    block = "\u2588"
-    shade = "\u2591"
     bar = (
         f"{DIM}[{RST}"
-        f"{GRN}{block * filled}"
-        f"{YEL}\u258c"
-        f"{DIM}{shade * max(0, empty)}"
+        f"{GRN}{'=' * filled}"
+        f"{YEL}>"
+        f"{DIM}{'-' * max(0, empty)}"
         f"{DIM}]{RST}"
     )
     pct_tag = f" {BLD}{pct * 100:.1f}%{RST}"
@@ -419,11 +428,10 @@ def sparkline(history, width=30):
     """Mini sparkline from recent price history."""
     data = list(history)[-width:]
     if len(data) < 2:
-        dash = "\u2500"
-        return f"{DIM}{dash * width}{RST}"
+        return f"{DIM}{'-' * width}{RST}"
     lo = min(data)
     hi = max(data)
-    bars = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+    bars = " ._-~*#@"
     line = ""
     for val in data:
         idx = int((val - lo) / (hi - lo + 1e-9) * (len(bars) - 1))
@@ -452,26 +460,27 @@ class BoxRenderer:
         if align == "center":
             lp = pad // 2
             rp = pad - lp
-            return f"{CYN}{BLD}\u2551{RST}{' ' * lp}{content}{' ' * rp}{CYN}{BLD}\u2551{RST}"
-        return f"{CYN}{BLD}\u2551{RST}{content}{' ' * max(0, pad)}{CYN}{BLD}\u2551{RST}"
+            return f"{CYN}{BLD}|{RST}{' ' * lp}{content}{' ' * rp}{CYN}{BLD}|{RST}"
+        return f"{CYN}{BLD}|{RST}{content}{' ' * max(0, pad)}{CYN}{BLD}|{RST}"
 
-    def sep(self, left="\u2560", right="\u2563", fill="\u2550"):
-        return f"{CYN}{BLD}{left}{fill * self.W}{right}{RST}"
+    def sep(self, left="+", right="+", fill="-"):
+        h = fill * self.W
+        return f"{CYN}{BLD}{left}{h}{right}{RST}"
 
     @property
     def top(self):
-        h = "\u2550" * self.W
-        return f"{CYN}{BLD}\u2554{h}\u2557{RST}"
+        h = "-" * self.W
+        return f"{CYN}{BLD}+{h}+{RST}"
 
     @property
     def bottom(self):
-        h = "\u2550" * self.W
-        return f"{CYN}{BLD}\u255a{h}\u255d{RST}"
+        h = "-" * self.W
+        return f"{CYN}{BLD}+{h}+{RST}"
 
 
 # ── Main Display Renderer ────────────────────────────────────────────────────
 
-SPINNERS = ["\u28fe", "\u28fd", "\u28fb", "\u28bf", "\u28ff", "\u28df", "\u28ef", "\u28f7"]
+SPINNERS = ["|", "/", "-", "\\", "|", "/", "-", "\\"]
 
 
 class TickerDisplay:
@@ -496,16 +505,16 @@ class TickerDisplay:
         is_up = td.change_percent >= 0
         PC = GRN if is_up else RED
         BPC = BGRN if is_up else BRED
-        arrow = "\u25b2" if is_up else "\u25bc"
+        arrow = "^" if is_up else "v"
 
         # Price direction tick
         if self.prev_price is not None:
             if td.price > self.prev_price:
-                pdiff = f" {GRN}\u2191{RST}"
+                pdiff = f" {GRN}^{RST}"
             elif td.price < self.prev_price:
-                pdiff = f" {RED}\u2193{RST}"
+                pdiff = f" {RED}v{RST}"
             else:
-                pdiff = f" {DIM}\u2500{RST}"
+                pdiff = f" {DIM}-{RST}"
         else:
             pdiff = ""
         self.prev_price = td.price
@@ -513,7 +522,7 @@ class TickerDisplay:
         self.price_history.append(td.price)
 
         spinner = SPINNERS[self.tick % len(SPINNERS)]
-        dot = f"{RED}\u25cf{RST}" if self.blink else f"{DIM}\u25cf{RST}"
+        dot = f"{RED}o{RST}" if self.blink else f"{DIM}o{RST}"
         now = td.timestamp.strftime("%Y-%m-%d  %H:%M:%S")
 
         b = self.box
@@ -522,7 +531,7 @@ class TickerDisplay:
         # ── Header ──
         lines.append(b.top)
         lines.append(b.line())
-        hdr = f"  {YEL}{BLD}\u26a1 BINANCE FUTURES{RST}   {DIM}\u2502{RST}   {dot} {BLD}LIVE{RST}   {DIM}\u2502{RST}   {CYN}{spinner}{RST}"
+        hdr = f"  {YEL}{BLD}>> BINANCE FUTURES{RST}   {DIM}|{RST}   {dot} {BLD}LIVE{RST}   {DIM}|{RST}   {CYN}{spinner}{RST}"
         lines.append(b.line(hdr))
         lines.append(b.line())
         lines.append(b.sep())
@@ -576,7 +585,7 @@ class TickerDisplay:
             spread_pct = (spread / td.price * 100) if td.price > 0 else 0
             bid_ask = (
                 f"  {GRN}Bid: ${fmt_price(td.best_bid)}{RST}"
-                f"  {DIM}\u2502{RST}  "
+                f"  {DIM}|{RST}  "
                 f"{RED}Ask: ${fmt_price(td.best_ask)}{RST}"
                 f"  {DIM}(spread: {spread_pct:.4f}%){RST}"
             )
@@ -590,7 +599,7 @@ class TickerDisplay:
         lines.append(b.line(f"  {bar}"))
         lo_hi = (
             f"  {RED}Lo: ${fmt_price(td.low_24h)}{RST}"
-            f"   {DIM}\u2502{RST}   "
+            f"   {DIM}|{RST}   "
             f"{GRN}Hi: ${fmt_price(td.high_24h)}{RST}"
         )
         lines.append(b.line(lo_hi))
@@ -632,7 +641,7 @@ class TickerDisplay:
         lines.append(b.sep())
 
         # ── Footer ──
-        footer = f"  {DIM}fstream.binance.com  \u2502  Press Ctrl+C to exit{RST}"
+        footer = f"  {DIM}fstream.binance.com  |  Press Ctrl+C to exit{RST}"
         lines.append(b.line(footer))
         lines.append(b.bottom)
 
@@ -778,9 +787,9 @@ def run(symbol: str, compact: bool = False):
     sys.stdout.write("\033[2J\033[H")
     sys.stdout.flush()
 
-    print(f"\n  {CYN}{BLD}\u26a1 CryptoTicker v{__version__}{RST}")
-    print(f"  {GRN}\u2713{RST} Symbol  : {BLD}{YEL}{symbol_upper}{RST}")
-    print(f"  {GRN}\u2713{RST} Stream  : {DIM}{url}{RST}")
+    print(f"\n  {CYN}{BLD}>> CryptoTicker v{__version__}{RST}")
+    print(f"  {GRN}*{RST} Symbol  : {BLD}{YEL}{symbol_upper}{RST}")
+    print(f"  {GRN}*{RST} Stream  : {DIM}{url}{RST}")
     print(f"\n  {CYN}Connecting...{RST}\n")
 
     conn.start()
@@ -854,12 +863,12 @@ def main():
         raw_input = args.symbol
     else:
         # Interactive prompt
-        print(f"\n  {CYN}{BLD}\u26a1 CryptoTicker v{__version__}{RST}\n")
+        print(f"\n  {CYN}{BLD}>> CryptoTicker v{__version__}{RST}\n")
         print(
             f"  {YEL}Enter coin symbol{RST} {DIM}(e.g. btc / eth / SOLUSDT / bitcoin):{RST}"
         )
         try:
-            raw_input = input(f"  {BLD}\u25b6 {RST}").strip()
+            raw_input = input(f"  {BLD}> {RST}").strip()
         except (EOFError, KeyboardInterrupt):
             print(f"\n  {DIM}Bye!{RST}\n")
             sys.exit(0)
